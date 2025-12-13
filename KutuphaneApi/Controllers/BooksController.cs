@@ -99,5 +99,80 @@ namespace KutuphaneApi.Controllers
 
             return Ok(list);
         }
+
+        // POST: /api/Books
+        [HttpPost]
+        public async Task<ActionResult> AddBook([FromBody] BookAddDto request)
+        {
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
+
+            var connStr = _config.GetConnectionString("KutuphaneDB");
+
+            using var conn = new SqlConnection(connStr);
+            await conn.OpenAsync();
+
+            var cmd = new SqlCommand(@"
+                INSERT INTO dbo.Books (title, author, category, isbn, total_copies, available_copies, created_at)
+                VALUES (@title, @author, @category, @isbn, @totalCopies, @availableCopies, GETDATE());
+                SELECT SCOPE_IDENTITY();", conn);
+
+            cmd.Parameters.AddWithValue("@title", request.Title);
+            cmd.Parameters.AddWithValue("@author", (object?)request.Author ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@category", (object?)request.Category ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@isbn", (object?)request.Isbn ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@totalCopies", request.TotalCopies);
+            cmd.Parameters.AddWithValue("@availableCopies", request.TotalCopies);
+
+            try
+            {
+                var newId = await cmd.ExecuteScalarAsync();
+                return CreatedAtAction(nameof(GetBooks), new { id = Convert.ToInt32(newId) }, new { id = Convert.ToInt32(newId) });
+            }
+            catch (SqlException ex) when (ex.Number == 2627 || ex.Number == 2601)
+            {
+                return BadRequest(new { error = "A book with this ISBN already exists." });
+            }
+            catch (SqlException ex)
+            {
+                return StatusCode(500, new { error = "Database error occurred.", details = ex.Message });
+            }
+        }
+
+        // DELETE: /api/Books/{id}
+        [HttpDelete("{id}")]
+        public async Task<ActionResult> RemoveBook(int id)
+        {
+            var connStr = _config.GetConnectionString("KutuphaneDB");
+
+            using var conn = new SqlConnection(connStr);
+            await conn.OpenAsync();
+
+            var cmd = new SqlCommand(@"
+                DELETE FROM dbo.Books 
+                WHERE book_id = @bookId;
+                SELECT @@ROWCOUNT;", conn);
+
+            cmd.Parameters.AddWithValue("@bookId", id);
+
+            try
+            {
+                var result = await cmd.ExecuteScalarAsync();
+                var rowsAffected = result != null ? Convert.ToInt32(result) : 0;
+
+                if (rowsAffected == 0)
+                {
+                    return NotFound(new { error = $"Book with ID {id} not found." });
+                }
+
+                return NoContent();
+            }
+            catch (SqlException ex)
+            {
+                return StatusCode(500, new { error = "Database error occurred.", details = ex.Message });
+            }
+        }
     }
 }
