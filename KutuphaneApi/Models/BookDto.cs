@@ -1,4 +1,4 @@
-﻿namespace KutuphaneApi.Models
+namespace KutuphaneApi.Models
 {
     public class BookDto
     {
@@ -8,5 +8,8 @@
         public string Kategori { get; set; } = "";
         public string Tarih { get; set; } = "";
         public string Durum { get; set; } = "";
+
+        public string? ImageUrl { get; set; }
+        public string? Location { get; set; }
     }
 }
