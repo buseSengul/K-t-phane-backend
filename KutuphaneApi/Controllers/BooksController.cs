@@ -102,7 +102,7 @@ namespace KutuphaneApi.Controllers
 
         // POST: /api/Books
         [HttpPost]
-        public async Task<ActionResult> AddBook([FromBody] BookAddDto request)
+        public async Task<ActionResult<BookDto>> AddBook([FromBody] BookAddDto newBook)
         {
             if (!ModelState.IsValid)
             {
@@ -114,30 +114,132 @@ namespace KutuphaneApi.Controllers
             using var conn = new SqlConnection(connStr);
             await conn.OpenAsync();
 
+            if (!string.IsNullOrWhiteSpace(newBook.Isbn))
+            {
+                var checkCmd = new SqlCommand(@"
+                    SELECT book_id, total_copies, available_copies 
+                    FROM dbo.Books 
+                    WHERE isbn = @isbn;", conn);
+
+                checkCmd.Parameters.AddWithValue("@isbn", newBook.Isbn);
+
+                using var checkReader = await checkCmd.ExecuteReaderAsync();
+
+                if (await checkReader.ReadAsync())
+                {
+                    // Book exists, update the copies
+                    int existingId = checkReader.GetInt32(0);
+                    int existingTotal = checkReader.GetInt32(1);
+                    int existingAvailable = checkReader.GetInt32(2);
+                    await checkReader.CloseAsync();
+
+                    int newTotal = existingTotal + newBook.TotalCopy;
+                    int newAvailable = existingAvailable + newBook.TotalCopy;
+
+                    var updateCmd = new SqlCommand(@"
+                        UPDATE dbo.Books 
+                        SET total_copies = @totalCopies, 
+                            available_copies = @availableCopies
+                        WHERE book_id = @id;", conn);
+
+                    updateCmd.Parameters.AddWithValue("@totalCopies", newTotal);
+                    updateCmd.Parameters.AddWithValue("@availableCopies", newAvailable);
+                    updateCmd.Parameters.AddWithValue("@id", existingId);
+
+                    await updateCmd.ExecuteNonQueryAsync();
+
+                    // Fetch the updated book
+                    var selectCmd = new SqlCommand(@"
+                        SELECT 
+                            book_id, title, author, category, created_at, available_copies, total_copies,
+                            image_url, location
+                        FROM dbo.Books
+                        WHERE book_id = @id;", conn);
+
+                    selectCmd.Parameters.AddWithValue("@id", existingId);
+
+                    using var reader = await selectCmd.ExecuteReaderAsync();
+
+                    if (await reader.ReadAsync())
+                    {
+                        int copies = reader.GetInt32(reader.GetOrdinal("available_copies"));
+
+                        var bookDto = new BookDto
+                        {
+                            Id = reader.GetInt32(reader.GetOrdinal("book_id")),
+                            Ad = reader.IsDBNull(reader.GetOrdinal("title")) ? "" : reader.GetString(reader.GetOrdinal("title")),
+                            Yazar = reader.IsDBNull(reader.GetOrdinal("author")) ? "" : reader.GetString(reader.GetOrdinal("author")),
+                            Kategori = reader.IsDBNull(reader.GetOrdinal("category")) ? "" : reader.GetString(reader.GetOrdinal("category")),
+                            Tarih = reader.GetDateTime(reader.GetOrdinal("created_at")).ToString("yyyy-MM-dd"),
+                            Durum = copies > 0 ? "Mevcut" : "Ödünçte",
+                        };
+
+                        return Ok(new { message = "Mevcut kitaba kopya eklendi", book = bookDto });
+                    }
+                }
+            }
+
+            // Insert new book if ISBN doesn't exist or is empty
             var cmd = new SqlCommand(@"
-                INSERT INTO dbo.Books (title, author, category, isbn, total_copies, available_copies, created_at)
-                VALUES (@title, @author, @category, @isbn, @totalCopies, @availableCopies, GETDATE());
+                INSERT INTO dbo.Books 
+                    (title, author, category, isbn, total_copies, available_copies, image_url, location)
+                VALUES 
+                    (@title, @author, @category, @isbn, @totalCopies, @availableCopies, @imageUrl, @location);
+                
                 SELECT SCOPE_IDENTITY();", conn);
 
-            cmd.Parameters.AddWithValue("@title", request.Title);
-            cmd.Parameters.AddWithValue("@author", (object?)request.Author ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@category", (object?)request.Category ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@isbn", (object?)request.Isbn ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@totalCopies", request.TotalCopies);
-            cmd.Parameters.AddWithValue("@availableCopies", request.TotalCopies);
+            cmd.Parameters.AddWithValue("@title", newBook.Name);
+            cmd.Parameters.AddWithValue("@author", (object?)newBook.Author ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@category", (object?)newBook.Category ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@isbn", (object?)newBook.Isbn ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@totalCopies", newBook.TotalCopy);
+            cmd.Parameters.AddWithValue("@availableCopies", newBook.TotalCopy); // available_copies = total_copies
+            cmd.Parameters.AddWithValue("@imageUrl", (object?)newBook.ImageUrl ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@location", (object?)newBook.Location ?? DBNull.Value);
 
             try
             {
-                var newId = await cmd.ExecuteScalarAsync();
-                return CreatedAtAction(nameof(GetBooks), new { id = Convert.ToInt32(newId) }, new { id = Convert.ToInt32(newId) });
+                var result = await cmd.ExecuteScalarAsync();
+                int newId = Convert.ToInt32(result);
+
+                // Fetch the newly created book
+                var selectCmd = new SqlCommand(@"
+                    SELECT 
+                        book_id, title, author, category, created_at, available_copies, total_copies,
+                        image_url, location
+                    FROM dbo.Books
+                    WHERE book_id = @id;", conn);
+
+                selectCmd.Parameters.AddWithValue("@id", newId);
+
+                using var reader = await selectCmd.ExecuteReaderAsync();
+
+                if (await reader.ReadAsync())
+                {
+                    int copies = reader.GetInt32(reader.GetOrdinal("available_copies"));
+
+                    var bookDto = new BookDto
+                    {
+                        Id = reader.GetInt32(reader.GetOrdinal("book_id")),
+                        Ad = reader.IsDBNull(reader.GetOrdinal("title")) ? "" : reader.GetString(reader.GetOrdinal("title")),
+                        Yazar = reader.IsDBNull(reader.GetOrdinal("author")) ? "" : reader.GetString(reader.GetOrdinal("author")),
+                        Kategori = reader.IsDBNull(reader.GetOrdinal("category")) ? "" : reader.GetString(reader.GetOrdinal("category")),
+                        Tarih = reader.GetDateTime(reader.GetOrdinal("created_at")).ToString("yyyy-MM-dd"),
+                        Durum = copies > 0 ? "Mevcut" : "Ödünçte",
+                    };
+
+                    return CreatedAtAction(nameof(GetBooks), new { id = newId }, bookDto);
+                }
+
+                return StatusCode(500, "Kitap oluşturuldu ancak geri alınamadı");
             }
-            catch (SqlException ex) when (ex.Number == 2627 || ex.Number == 2601)
+            catch (SqlException ex) when (ex.Number == 2627 || ex.Number == 2601) // Unique constraint violation
             {
-                return BadRequest(new { error = "A book with this ISBN already exists." });
+                return Conflict(new { message = "Bu ISBN numarası zaten kullanılıyor" });
             }
-            catch (SqlException ex)
+            catch (Exception ex)
             {
-                return StatusCode(500, new { error = "Database error occurred.", details = ex.Message });
+                return StatusCode(500, new { message = "Kitap eklenirken bir hata oluştu", error = ex.Message });
             }
         }
 
@@ -150,28 +252,63 @@ namespace KutuphaneApi.Controllers
             using var conn = new SqlConnection(connStr);
             await conn.OpenAsync();
 
-            var cmd = new SqlCommand(@"
-                DELETE FROM dbo.Books 
-                WHERE book_id = @bookId;
-                SELECT @@ROWCOUNT;", conn);
+            // Check if book exists and get copy information
+            var checkCmd = new SqlCommand(@"
+                SELECT total_copies, available_copies 
+                FROM dbo.Books 
+                WHERE book_id = @id", conn);
+            checkCmd.Parameters.AddWithValue("@id", id);
 
-            cmd.Parameters.AddWithValue("@bookId", id);
+            using var reader = await checkCmd.ExecuteReaderAsync();
+
+            if (!await reader.ReadAsync())
+            {
+                return NotFound(new { message = $"ID {id} ile eşleşen kitap bulunamadı" });
+            }
+
+            int totalCopies = reader.GetInt32(0);
+            int availableCopies = reader.GetInt32(1);
+            await reader.CloseAsync();
+
+            if (availableCopies <= 0)
+            {
+                return BadRequest(new { 
+                    message = "Rafta silinebilecek kopya yok. Tüm kopyalar ödünçte.", 
+                    totalCopies, 
+                    availableCopies 
+                });
+            }
 
             try
             {
-                var result = await cmd.ExecuteScalarAsync();
-                var rowsAffected = result != null ? Convert.ToInt32(result) : 0;
-
-                if (rowsAffected == 0)
+                // Reduce the number of copies by 1
+                if (totalCopies > 1)
                 {
-                    return NotFound(new { error = $"Book with ID {id} not found." });
+                    var updateCmd = new SqlCommand(@"
+                        UPDATE dbo.Books 
+                        SET total_copies = total_copies - 1, 
+                            available_copies = available_copies - 1
+                        WHERE book_id = @id", conn);
+                    updateCmd.Parameters.AddWithValue("@id", id);
+                    
+                    await updateCmd.ExecuteNonQueryAsync();
+                    
+                    int newTotal = totalCopies - 1;
+                    return Ok(new { message = "Kitap kopyası azaltıldı", remainingCopies = newTotal });
                 }
-
-                return NoContent();
+                else
+                {
+                    // Only one copy left, delete the book completely
+                    var deleteCmd = new SqlCommand("DELETE FROM dbo.Books WHERE book_id = @id", conn);
+                    deleteCmd.Parameters.AddWithValue("@id", id);
+                    
+                    await deleteCmd.ExecuteNonQueryAsync();
+                    return Ok(new { message = "Kitap başarıyla silindi" });
+                }
             }
-            catch (SqlException ex)
+            catch (Exception ex)
             {
-                return StatusCode(500, new { error = "Database error occurred.", details = ex.Message });
+                return StatusCode(500, new { message = "Kitap silinirken bir hata oluştu", error = ex.Message });
             }
         }
     }

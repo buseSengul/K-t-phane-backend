@@ -2,10 +2,12 @@ namespace KutuphaneApi.Models
 {
     public class BookAddDto
     {
-        public string Title { get; set; } = "";
+        public string Name { get; set; } = "";
         public string? Author { get; set; }
         public string? Category { get; set; }
         public string? Isbn { get; set; }
-        public int TotalCopies { get; set; } = 1;
+        public int TotalCopy { get; set; } = 1;
+        public string? ImageUrl { get; set; }
+        public string? Location { get; set; }
     }
 }
