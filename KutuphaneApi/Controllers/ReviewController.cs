@@ -142,5 +142,49 @@ namespace KutuphaneApi.Controllers
 
             return Ok(response);
         }
+
+        // GET: /api/Reviews/top-rated
+        [HttpGet("top-rated")]
+        public async Task<ActionResult<IEnumerable<TopBookDto>>> GetTopBooks()
+        {
+            var list = new List<TopBookDto>();
+            var connStr = _config.GetConnectionString("KutuphaneDB");
+
+            using var conn = new SqlConnection(connStr);
+            await conn.OpenAsync();
+
+            var sql = @"
+                SELECT TOP 10 
+                    b.book_id, b.title, b.author, b.category, b.created_at, b.available_copies,
+                    AVG(CAST(r.rating AS FLOAT)) as AvgRating,
+                    COUNT(r.comment) as CommentCount
+                FROM dbo.Books b
+                INNER JOIN dbo.BookReviews r ON b.book_id = r.book_id
+                WHERE r.rating IS NOT NULL
+                GROUP BY b.book_id, b.title, b.author, b.category, b.created_at, b.available_copies
+                ORDER BY AvgRating DESC";
+
+            var cmd = new SqlCommand(sql, conn);
+            using var reader = await cmd.ExecuteReaderAsync();
+
+            while (await reader.ReadAsync())
+            {
+                int copies = reader.GetInt32(reader.GetOrdinal("available_copies"));
+                
+                list.Add(new TopBookDto
+                {
+                    Id = reader.GetInt32(reader.GetOrdinal("book_id")),
+                    Ad = reader.GetString(reader.GetOrdinal("title")),
+                    Yazar = reader.GetString(reader.GetOrdinal("author")),
+                    Kategori = reader.IsDBNull(reader.GetOrdinal("category")) ? "" : reader.GetString(reader.GetOrdinal("category")),
+                    Tarih = reader.GetDateTime(reader.GetOrdinal("created_at")).ToString("yyyy-MM-dd"),
+                    Durum = copies > 0 ? "Mevcut" : "Ödünçte",
+                    OrtalamaPuan = Math.Round(reader.GetDouble(reader.GetOrdinal("AvgRating")), 1),
+                    YorumSayisi = reader.GetInt32(reader.GetOrdinal("CommentCount"))
+                });
+            }
+
+            return Ok(list);
+        }
     }
 }
