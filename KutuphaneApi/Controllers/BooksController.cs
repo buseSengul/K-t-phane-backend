@@ -243,10 +243,15 @@ namespace KutuphaneApi.Controllers
             }
         }
 
-        // DELETE: /api/Books/{id}
+        // DELETE: /api/Books/{id}?amount=1
         [HttpDelete("{id}")]
-        public async Task<ActionResult> RemoveBook(int id)
+        public async Task<ActionResult> RemoveBook(int id, [FromQuery] int amount = 1)
         {
+            if (amount <= 0)
+            {
+                 return BadRequest(new { message = "Silinecek miktar 1 veya daha büyük olmalıdır." });
+            }
+
             var connStr = _config.GetConnectionString("KutuphaneDB");
 
             using var conn = new SqlConnection(connStr);
@@ -270,10 +275,10 @@ namespace KutuphaneApi.Controllers
             int availableCopies = reader.GetInt32(1);
             await reader.CloseAsync();
 
-            if (availableCopies <= 0)
+            if (availableCopies < amount)
             {
                 return BadRequest(new { 
-                    message = "Rafta silinebilecek kopya yok. Tüm kopyalar ödünçte.", 
+                    message = $"Rafta yeterli kopya yok. Mevcut: {availableCopies}, Silinmek istenen: {amount}", 
                     totalCopies, 
                     availableCopies 
                 });
@@ -281,29 +286,36 @@ namespace KutuphaneApi.Controllers
 
             try
             {
-                // Reduce the number of copies by 1
-                if (totalCopies > 1)
+                // If we are deleting all copies (and implicitly all are available), delete the row
+                if (totalCopies == amount)
                 {
-                    var updateCmd = new SqlCommand(@"
-                        UPDATE dbo.Books 
-                        SET total_copies = total_copies - 1, 
-                            available_copies = available_copies - 1
-                        WHERE book_id = @id", conn);
-                    updateCmd.Parameters.AddWithValue("@id", id);
-                    
-                    await updateCmd.ExecuteNonQueryAsync();
-                    
-                    int newTotal = totalCopies - 1;
-                    return Ok(new { message = "Kitap kopyası azaltıldı", remainingCopies = newTotal });
-                }
-                else
-                {
-                    // Only one copy left, delete the book completely
                     var deleteCmd = new SqlCommand("DELETE FROM dbo.Books WHERE book_id = @id", conn);
                     deleteCmd.Parameters.AddWithValue("@id", id);
                     
                     await deleteCmd.ExecuteNonQueryAsync();
-                    return Ok(new { message = "Kitap başarıyla silindi" });
+                    return Ok(new { message = "Kitabın tüm kopyaları ve kaydı başarıyla silindi" });
+                }
+                else
+                {
+                    // Reduce the number of copies by 'amount'
+                    var updateCmd = new SqlCommand(@"
+                        UPDATE dbo.Books 
+                        SET total_copies = total_copies - @amount, 
+                            available_copies = available_copies - @amount
+                        WHERE book_id = @id", conn);
+                    updateCmd.Parameters.AddWithValue("@id", id);
+                    updateCmd.Parameters.AddWithValue("@amount", amount);
+                    
+                    await updateCmd.ExecuteNonQueryAsync();
+                    
+                    int newTotal = totalCopies - amount;
+                    int newAvailable = availableCopies - amount;
+
+                    return Ok(new { 
+                        message = $"{amount} adet kitap kopyası silindi", 
+                        remainingTotal = newTotal,
+                        remainingAvailable = newAvailable
+                    });
                 }
             }
             catch (Exception ex)
